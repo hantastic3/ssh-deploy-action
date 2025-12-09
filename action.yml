@@ -45,6 +45,9 @@ runs:
         username: ${{ inputs.username }}
         key: ${{ inputs.ssh_key }}
         script: |
+          # Prune old images
+          sudo docker image prune -a -f
+
           # Log into registry
           if [[ "${{ inputs.registry }}" == *.aliyuncs.com* ]]; then
             sudo docker login ${{ inputs.registry }} \
@@ -66,12 +69,5 @@ runs:
           sudo docker compose pull
           sudo docker compose up -d
 
-          # Prune old images
-          if [[ "${{ inputs.image_tag }}" != "latest" ]]; then
-            sudo docker images --format "{{'{{'}}.Repository}}:{{'{{'}}.Tag}}" \
-            | grep "${{ inputs.repository }}" \
-            | grep -v -E "(:${{ inputs.image_tag }}$|:latest$)" \
-            | xargs -r sudo docker rmi
-          fi
-
+          # Clean up
           sudo docker system prune -f
