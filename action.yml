@@ -34,6 +34,10 @@ inputs:
   working_directory:
     description: "Path on host to your docker-compose directory"
     required: true
+  compose_up_args:
+    description: "Extra args for `docker compose up` (default: -d)"
+    required: false
+    default: "-d"
 
 runs:
   using: "composite"
@@ -67,7 +71,7 @@ runs:
 
           # Pull & restart
           sudo docker compose pull
-          sudo docker compose up -d
+          sudo docker compose up ${{ inputs.compose_up_args }}
 
           # Clean up
-          sudo docker system prune -f
+          sudo docker system prune -af

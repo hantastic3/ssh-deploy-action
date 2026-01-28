@@ -17,3 +17,4 @@ steps:
       aliyun_username: ${{ secrets.ALIYUN_USER }} # if you are using aliyun registry
       aliyun_password: ${{ secrets.ALIYUN_PASS }}
       working_directory: /srv/my-app
+      compose_up_args: "--scale bot-mqtt=2 -d"
