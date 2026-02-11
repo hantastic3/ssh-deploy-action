@@ -16,10 +16,16 @@ inputs:
     required: true
   registry:
     description: "Docker registry (e.g. xyz.aliyuncs.com or AWS ECR URL)"
-    required: true
+    required: false
+    default: ""
   repository:
     description: "Image repository name (e.g. my-org/my-app)"
-    required: true
+    required: false
+    default: ""
+  repository_uri:
+    description: "Full image URI without tag (e.g. registry.example.com/my-org/my-app). If set, overrides `registry` + `repository`."
+    required: false
+    default: ""
   image_tag:
     description: "New image tag to deploy"
     required: true
@@ -42,36 +48,76 @@ inputs:
 runs:
   using: "composite"
   steps:
-    - name: Deploy via SSH
-      uses: appleboy/ssh-action@v1.0.0
+    - name: Resolve image location
+      id: resolve_image
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        REPOSITORY_URI="${{ inputs.repository_uri }}"
+        REGISTRY_INPUT="${{ inputs.registry }}"
+        REPOSITORY_INPUT="${{ inputs.repository }}"
+
+        if [[ -n "$REPOSITORY_URI" ]]; then
+          REGISTRY="${REPOSITORY_URI%%/*}"
+          REPOSITORY="${REPOSITORY_URI#*/}"
+          if [[ "$REGISTRY" == "$REPOSITORY_URI" || -z "$REPOSITORY" ]]; then
+            echo "Invalid repository_uri: '$REPOSITORY_URI'. Expected format: registry/repository"
+            exit 1
+          fi
+        else
+          REGISTRY="$REGISTRY_INPUT"
+          REPOSITORY="$REPOSITORY_INPUT"
+        fi
+
+        if [[ -z "$REGISTRY" || -z "$REPOSITORY" ]]; then
+          echo "Missing image location. Provide either repository_uri or both registry and repository."
+          exit 1
+        fi
+
+        if [[ "$REGISTRY" == *.aliyuncs.com* ]]; then
+          PROVIDER="aliyun"
+        else
+          PROVIDER="aws"
+        fi
+
+        {
+          echo "registry=$REGISTRY"
+          echo "repository=$REPOSITORY"
+          echo "provider=$PROVIDER"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Deploy via SSH (Aliyun)
+      if: ${{ steps.resolve_image.outputs.provider == 'aliyun' }}
+      uses: appleboy/ssh-action@v1.2.1
+      env:
+        REGISTRY: ${{ steps.resolve_image.outputs.registry }}
+        REPOSITORY: ${{ steps.resolve_image.outputs.repository }}
+        IMAGE_TAG: ${{ inputs.image_tag }}
+        WORKING_DIRECTORY: ${{ inputs.working_directory }}
+        COMPOSE_UP_ARGS: ${{ inputs.compose_up_args }}
+        ALIYUN_USERNAME: ${{ inputs.aliyun_username }}
+        ALIYUN_PASSWORD: ${{ inputs.aliyun_password }}
       with:
         host: ${{ inputs.host }}
         username: ${{ inputs.username }}
         key: ${{ inputs.ssh_key }}
-        script: |
-          # Prune old images
-          sudo docker image prune -a -f
+        envs: REGISTRY,REPOSITORY,IMAGE_TAG,WORKING_DIRECTORY,COMPOSE_UP_ARGS,ALIYUN_USERNAME,ALIYUN_PASSWORD
+        script_path: ${{ github.action_path }}/scripts/deploy_aliyun.sh
 
-          # Log into registry
-          if [[ "${{ inputs.registry }}" == *.aliyuncs.com* ]]; then
-            sudo docker login ${{ inputs.registry }} \
-              -u ${{ inputs.aliyun_username }} \
-              --password ${{ inputs.aliyun_password }}
-          else
-            sudo aws ecr get-login-password --region ${{ env.AWS_REGION }} | \
-              sudo docker login --username AWS --password-stdin ${{ inputs.registry }}
-          fi
-
-          cd ${{ inputs.working_directory }}
-
-          # Update docker-compose.yml with new tag
-          if [[ "${{ inputs.image_tag }}" != "latest" ]]; then
-            sed -i "s|${{ inputs.repository }}:[0-9]*\.[0-9]*\.[0-9]*|${{ inputs.repository }}:${{ inputs.image_tag }}|g" docker-compose.yml
-          fi
-
-          # Pull & restart
-          sudo docker compose pull
-          sudo docker compose up ${{ inputs.compose_up_args }}
-
-          # Clean up
-          sudo docker system prune -af
+    - name: Deploy via SSH (AWS)
+      if: ${{ steps.resolve_image.outputs.provider == 'aws' }}
+      uses: appleboy/ssh-action@v1.2.1
+      env:
+        REGISTRY: ${{ steps.resolve_image.outputs.registry }}
+        REPOSITORY: ${{ steps.resolve_image.outputs.repository }}
+        IMAGE_TAG: ${{ inputs.image_tag }}
+        WORKING_DIRECTORY: ${{ inputs.working_directory }}
+        COMPOSE_UP_ARGS: ${{ inputs.compose_up_args }}
+        AWS_REGION: ${{ env.AWS_REGION }}
+      with:
+        host: ${{ inputs.host }}
+        username: ${{ inputs.username }}
+        key: ${{ inputs.ssh_key }}
+        envs: REGISTRY,REPOSITORY,IMAGE_TAG,WORKING_DIRECTORY,COMPOSE_UP_ARGS,AWS_REGION
+        script_path: ${{ github.action_path }}/scripts/deploy_aws.sh
